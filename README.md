@@ -1,4 +1,4 @@
-# open-puffer  High-Performance Local Vector Database
+# Puffer MVP - High-Performance Local Vector Database
 
 A single-node, NVMe-backed, segment-based vector database implemented in Rust.
 
@@ -131,6 +131,49 @@ PAYLOAD OFFSET TABLE:
 PAYLOAD BLOB:
   Concatenated JSON payloads
 ```
+
+## Performance
+
+### Recall@10 (GloVe-100 Dataset)
+
+Tested on 10,000 vectors from [ANN-Benchmarks GloVe-100-angular](http://ann-benchmarks.com/), 100 dimensions, cosine metric.
+
+| nprobe | Recall@10 | P50 Latency | P99 Latency | QPS |
+|--------|-----------|-------------|-------------|-----|
+| 4 | **69.4%** | 0.022ms | 0.030ms | 20,444 |
+| 8 | **79.5%** | 0.033ms | 0.054ms | 17,661 |
+| 16 | **89.5%** | 0.053ms | 0.069ms | 12,401 |
+| 32 | **96.8%** | 0.092ms | 0.145ms | 8,464 |
+| 64 | **99.7%** | 0.155ms | 0.251ms | 5,388 |
+
+### Latency at Scale (1M Vectors)
+
+128 dimensions, cosine metric, 10 L1 segments with router selecting top 5.
+
+| nprobe | P50 Latency | P99 Latency | QPS |
+|--------|-------------|-------------|-----|
+| 4 | **1.30ms** | 3.25ms | 679 |
+| 8 | **1.72ms** | 3.04ms | 560 |
+
+### Insert Throughput
+
+| Vectors | Dimension | Throughput |
+|---------|-----------|------------|
+| 100K | 128 | 9,022 vec/s |
+| 1M | 128 | 8,978 vec/s |
+
+### Recommended Settings
+
+| Use Case | nprobe | Expected Recall | P50 Latency |
+|----------|--------|-----------------|-------------|
+| Low latency | 4 | ~70% | <0.03ms |
+| Balanced | 16 | ~90% | <0.06ms |
+| High accuracy | 32 | ~97% | <0.1ms |
+| Maximum recall | 64+ | ~99%+ | <0.2ms |
+
+> See [BENCHMARKS.md](BENCHMARKS.md) for full benchmark details and reproduction instructions.
+
+---
 
 ## Benchmarks
 

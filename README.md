@@ -1,4 +1,4 @@
-# Puffer MVP - High-Performance Local Vector Database
+# OpenPuffer - High-Performance Local Vector Database
 
 A single-node, NVMe-backed, segment-based vector database implemented in Rust.
 

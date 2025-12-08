@@ -1,0 +1,20 @@
+[package]
+name = "puffer-bench"
+version.workspace = true
+edition.workspace = true
+
+[[bench]]
+name = "segment_benchmarks"
+harness = false
+
+[dependencies]
+puffer-core = { workspace = true }
+puffer-storage = { workspace = true }
+puffer-index = { workspace = true }
+puffer-query = { workspace = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+tempfile = "3.9"

@@ -1,0 +1,76 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/storage",
+    "crates/index",
+    "crates/query",
+    "crates/api",
+    "crates/cli",
+    "crates/bench",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Puffer Team"]
+license = "MIT"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Web framework
+axum = { version = "0.7", features = ["json"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Parallelism
+rayon = "1.8"
+
+# Memory mapping
+memmap2 = "0.9"
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# UUID
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# HTTP client (for CLI)
+reqwest = { version = "0.11", features = ["json"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Random
+rand = "0.8"
+rand_distr = "0.4"
+
+# Internal crates
+puffer-core = { path = "crates/core" }
+puffer-storage = { path = "crates/storage" }
+puffer-index = { path = "crates/index" }
+puffer-query = { path = "crates/query" }
+puffer-api = { path = "crates/api" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+
+[profile.bench]
+lto = true
+codegen-units = 1

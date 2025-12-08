@@ -1,0 +1,25 @@
+[package]
+name = "puffer-api"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "puffer-server"
+path = "src/main.rs"
+
+[dependencies]
+puffer-core = { workspace = true }
+puffer-storage = { workspace = true }
+puffer-index = { workspace = true }
+puffer-query = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }

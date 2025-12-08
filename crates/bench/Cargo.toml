@@ -3,6 +3,14 @@ name = "puffer-bench"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "recall-bench"
+path = "src/bin/recall_bench.rs"
+
+[[bin]]
+name = "real-recall-bench"
+path = "src/bin/real_recall_bench.rs"
+
 [[bench]]
 name = "segment_benchmarks"
 harness = false
@@ -14,6 +22,13 @@ puffer-index = { workspace = true }
 puffer-query = { workspace = true }
 rand = { workspace = true }
 rand_distr = { workspace = true }
+clap = { workspace = true }
+rayon = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+ndarray = "0.16"
+ndarray-npy = "0.9"
 
 [dev-dependencies]
 criterion = { workspace = true }

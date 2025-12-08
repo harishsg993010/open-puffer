@@ -4,8 +4,10 @@
 
 pub mod catalog;
 pub mod error;
+pub mod router;
 pub mod segment;
 
-pub use catalog::{Catalog, Collection, CollectionConfig};
+pub use catalog::{Catalog, Collection, CollectionConfig, CollectionMeta, SegmentMeta};
 pub use error::{StorageError, StorageResult};
+pub use router::{compute_centroid, compute_centroid_from_slice, RouterEntry, RouterIndex};
 pub use segment::{ClusterMeta, LoadedSegment, SegmentBuilder, SegmentHeader};

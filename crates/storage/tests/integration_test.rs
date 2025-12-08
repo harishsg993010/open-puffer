@@ -16,6 +16,19 @@ fn random_vector(dim: usize) -> Vec<f32> {
     (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect()
 }
 
+fn test_collection_config(name: &str, dimension: usize, metric: Metric) -> CollectionConfig {
+    CollectionConfig {
+        name: name.to_string(),
+        dimension,
+        metric,
+        staging_threshold: 100,
+        num_clusters: 10,
+        router_top_m: 5,
+        l0_max_segments: 10,
+        segment_target_size: 100_000,
+    }
+}
+
 #[test]
 fn test_full_pipeline() {
     // Create catalog
@@ -24,13 +37,7 @@ fn test_full_pipeline() {
 
     // Create collection
     catalog
-        .create_collection(CollectionConfig {
-            name: "test_collection".to_string(),
-            dimension: 128,
-            metric: Metric::Cosine,
-            staging_threshold: 100,
-            num_clusters: 10,
-        })
+        .create_collection(test_collection_config("test_collection", 128, Metric::Cosine))
         .unwrap();
 
     // Create query engine
@@ -177,13 +184,7 @@ fn test_empty_collection_search() {
     let catalog = Arc::new(Catalog::open(dir.path()).unwrap());
 
     catalog
-        .create_collection(CollectionConfig {
-            name: "empty".to_string(),
-            dimension: 32,
-            metric: Metric::Cosine,
-            staging_threshold: 1000,
-            num_clusters: 10,
-        })
+        .create_collection(test_collection_config("empty", 32, Metric::Cosine))
         .unwrap();
 
     let engine = QueryEngine::new(catalog);
@@ -200,13 +201,7 @@ fn test_dimension_mismatch() {
     let catalog = Arc::new(Catalog::open(dir.path()).unwrap());
 
     catalog
-        .create_collection(CollectionConfig {
-            name: "dim64".to_string(),
-            dimension: 64,
-            metric: Metric::L2,
-            staging_threshold: 1000,
-            num_clusters: 10,
-        })
+        .create_collection(test_collection_config("dim64", 64, Metric::L2))
         .unwrap();
 
     let engine = QueryEngine::new(catalog);

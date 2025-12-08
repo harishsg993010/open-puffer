@@ -1,6 +1,7 @@
 //! Catalog management for collections.
 
 use crate::error::{StorageError, StorageResult};
+use crate::router::{RouterEntry, RouterIndex};
 use puffer_core::Metric;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -20,9 +21,19 @@ pub struct CollectionConfig {
     /// Maximum vectors in staging buffer before building a segment.
     #[serde(default = "default_staging_threshold")]
     pub staging_threshold: usize,
-    /// Number of clusters per segment.
+    /// Number of clusters per segment (for L0 segments).
+    /// For larger segments, this will be scaled based on sqrt(num_vectors).
     #[serde(default = "default_num_clusters")]
     pub num_clusters: usize,
+    /// Number of top segments to search via router (0 = search all).
+    #[serde(default = "default_router_top_m")]
+    pub router_top_m: usize,
+    /// Maximum L0 segments before triggering compaction.
+    #[serde(default = "default_l0_max_segments")]
+    pub l0_max_segments: usize,
+    /// Target size for L1 (compacted) segments.
+    #[serde(default = "default_segment_target_size")]
+    pub segment_target_size: usize,
 }
 
 fn default_staging_threshold() -> usize {
@@ -33,16 +44,82 @@ fn default_num_clusters() -> usize {
     100
 }
 
+fn default_router_top_m() -> usize {
+    5
+}
+
+fn default_l0_max_segments() -> usize {
+    10
+}
+
+fn default_segment_target_size() -> usize {
+    100_000
+}
+
+/// Metadata for a single segment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SegmentMeta {
+    /// Segment filename.
+    pub name: String,
+    /// LSM level (0 = small/new, 1 = compacted, etc.)
+    pub level: u32,
+    /// Number of vectors in this segment.
+    pub num_vectors: usize,
+}
+
 /// Persistent collection metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionMeta {
     pub config: CollectionConfig,
-    /// List of segment file names (relative to collection directory).
+    /// List of segment metadata (replaces old Vec<String>).
+    /// For backwards compatibility, we support both formats.
+    #[serde(default)]
+    pub segment_metas: Vec<SegmentMeta>,
+    /// Legacy: List of segment file names (for backwards compatibility).
+    #[serde(default)]
     pub segments: Vec<String>,
     /// Number of vectors in staging buffer.
     pub staging_count: usize,
     /// Total number of vectors across all segments.
     pub total_vectors: usize,
+}
+
+impl CollectionMeta {
+    /// Get all segment names (handles both old and new format).
+    pub fn get_segment_names(&self) -> Vec<String> {
+        if !self.segment_metas.is_empty() {
+            self.segment_metas.iter().map(|s| s.name.clone()).collect()
+        } else {
+            self.segments.clone()
+        }
+    }
+
+    /// Add a new segment.
+    pub fn add_segment(&mut self, name: String, level: u32, num_vectors: usize) {
+        self.segment_metas.push(SegmentMeta {
+            name: name.clone(),
+            level,
+            num_vectors,
+        });
+        // Also update legacy field for compatibility
+        self.segments.push(name);
+    }
+
+    /// Remove segments by name.
+    pub fn remove_segments(&mut self, names: &[String]) {
+        self.segment_metas.retain(|s| !names.contains(&s.name));
+        self.segments.retain(|s| !names.contains(s));
+    }
+
+    /// Get L0 segments (level 0).
+    pub fn get_l0_segments(&self) -> Vec<&SegmentMeta> {
+        self.segment_metas.iter().filter(|s| s.level == 0).collect()
+    }
+
+    /// Count L0 segments.
+    pub fn l0_segment_count(&self) -> usize {
+        self.segment_metas.iter().filter(|s| s.level == 0).count()
+    }
 }
 
 /// Runtime collection state.
@@ -54,6 +131,8 @@ pub struct Collection {
     pub staging_vectors: Vec<Vec<f32>>,
     pub staging_ids: Vec<puffer_core::VectorId>,
     pub staging_payloads: Vec<Option<serde_json::Value>>,
+    /// Router index for segment selection.
+    pub router: RouterIndex,
 }
 
 impl Collection {
@@ -64,10 +143,13 @@ impl Collection {
 
         let meta = CollectionMeta {
             config,
+            segment_metas: Vec::new(),
             segments: Vec::new(),
             staging_count: 0,
             total_vectors: 0,
         };
+
+        let router = RouterIndex::new();
 
         let collection = Self {
             meta,
@@ -75,9 +157,11 @@ impl Collection {
             staging_vectors: Vec::new(),
             staging_ids: Vec::new(),
             staging_payloads: Vec::new(),
+            router,
         };
 
         collection.save_meta()?;
+        collection.save_router()?;
         Ok(collection)
     }
 
@@ -85,7 +169,19 @@ impl Collection {
     pub fn load(path: &Path) -> StorageResult<Self> {
         let meta_path = path.join("meta.json");
         let meta_json = fs::read_to_string(&meta_path)?;
-        let meta: CollectionMeta = serde_json::from_str(&meta_json)?;
+        let mut meta: CollectionMeta = serde_json::from_str(&meta_json)?;
+
+        // Migrate old format to new format if needed
+        if meta.segment_metas.is_empty() && !meta.segments.is_empty() {
+            tracing::info!("Migrating {} legacy segments to new format", meta.segments.len());
+            for name in &meta.segments {
+                meta.segment_metas.push(SegmentMeta {
+                    name: name.clone(),
+                    level: 0,
+                    num_vectors: 0, // Will be populated on next operation
+                });
+            }
+        }
 
         // Load staging buffer if exists
         let staging_path = path.join("staging.json");
@@ -97,12 +193,20 @@ impl Collection {
             (Vec::new(), Vec::new(), Vec::new())
         };
 
+        // Load router index
+        let router_path = path.join("router_index.json");
+        let router = RouterIndex::load(&router_path).unwrap_or_else(|_| {
+            tracing::warn!("Router index not found or corrupted, creating new one");
+            RouterIndex::new()
+        });
+
         Ok(Self {
             meta,
             path: path.to_path_buf(),
             staging_vectors,
             staging_ids,
             staging_payloads,
+            router,
         })
     }
 
@@ -112,6 +216,24 @@ impl Collection {
         let meta_json = serde_json::to_string_pretty(&self.meta)?;
         fs::write(&meta_path, meta_json)?;
         Ok(())
+    }
+
+    /// Save router index to disk.
+    pub fn save_router(&self) -> StorageResult<()> {
+        let router_path = self.path.join("router_index.json");
+        self.router.save(&router_path)
+    }
+
+    /// Update router entry for a segment.
+    pub fn update_router_entry(&mut self, entry: RouterEntry) -> StorageResult<()> {
+        self.router.upsert(entry);
+        self.save_router()
+    }
+
+    /// Remove segment from router.
+    pub fn remove_from_router(&mut self, segment_id: &str) -> StorageResult<()> {
+        self.router.remove(segment_id);
+        self.save_router()
     }
 
     /// Save staging buffer to disk.
@@ -141,6 +263,11 @@ impl Collection {
         self.path.join(segment_name)
     }
 
+    /// Get path to router index file.
+    pub fn router_path(&self) -> PathBuf {
+        self.path.join("router_index.json")
+    }
+
     /// Generate a new segment filename.
     pub fn new_segment_name(&self) -> String {
         let id = uuid::Uuid::new_v4();
@@ -153,7 +280,7 @@ impl Collection {
             name: self.meta.config.name.clone(),
             dimension: self.meta.config.dimension,
             metric: self.meta.config.metric,
-            num_segments: self.meta.segments.len(),
+            num_segments: self.meta.get_segment_names().len(),
             total_vectors: self.meta.total_vectors,
             staging_vectors: self.staging_vectors.len(),
         }
@@ -302,19 +429,25 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn test_config(name: &str) -> CollectionConfig {
+        CollectionConfig {
+            name: name.to_string(),
+            dimension: 128,
+            metric: Metric::Cosine,
+            staging_threshold: 1000,
+            num_clusters: 10,
+            router_top_m: 5,
+            l0_max_segments: 10,
+            segment_target_size: 100_000,
+        }
+    }
+
     #[test]
     fn test_create_collection() {
         let dir = tempdir().unwrap();
         let catalog = Catalog::open(dir.path()).unwrap();
 
-        let config = CollectionConfig {
-            name: "test".to_string(),
-            dimension: 128,
-            metric: Metric::Cosine,
-            staging_threshold: 1000,
-            num_clusters: 10,
-        };
-
+        let config = test_config("test");
         catalog.create_collection(config).unwrap();
 
         let collections = catalog.list_collections();
@@ -322,13 +455,7 @@ mod tests {
         assert!(collections.contains(&"test".to_string()));
 
         // Test duplicate creation
-        let config2 = CollectionConfig {
-            name: "test".to_string(),
-            dimension: 128,
-            metric: Metric::Cosine,
-            staging_threshold: 1000,
-            num_clusters: 10,
-        };
+        let config2 = test_config("test");
         assert!(catalog.create_collection(config2).is_err());
     }
 
@@ -339,13 +466,9 @@ mod tests {
         // Create catalog and collection
         {
             let catalog = Catalog::open(dir.path()).unwrap();
-            let config = CollectionConfig {
-                name: "persist_test".to_string(),
-                dimension: 64,
-                metric: Metric::L2,
-                staging_threshold: 500,
-                num_clusters: 5,
-            };
+            let mut config = test_config("persist_test");
+            config.dimension = 64;
+            config.metric = Metric::L2;
             catalog.create_collection(config).unwrap();
         }
 
@@ -359,6 +482,8 @@ mod tests {
             let coll = coll.read().unwrap();
             assert_eq!(coll.meta.config.dimension, 64);
             assert_eq!(coll.meta.config.metric, Metric::L2);
+            // Verify router was loaded
+            assert!(coll.router.entries.is_empty());
         }
     }
 
@@ -367,14 +492,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let catalog = Catalog::open(dir.path()).unwrap();
 
-        let config = CollectionConfig {
-            name: "to_drop".to_string(),
-            dimension: 32,
-            metric: Metric::Cosine,
-            staging_threshold: 100,
-            num_clusters: 2,
-        };
-
+        let config = test_config("to_drop");
         catalog.create_collection(config).unwrap();
         assert!(catalog.list_collections().contains(&"to_drop".to_string()));
 
@@ -383,5 +501,39 @@ mod tests {
 
         // Verify directory is deleted
         assert!(!dir.path().join("to_drop").exists());
+    }
+
+    #[test]
+    fn test_router_persistence() {
+        let dir = tempdir().unwrap();
+
+        // Create catalog and collection, add router entry
+        {
+            let catalog = Catalog::open(dir.path()).unwrap();
+            let config = test_config("router_test");
+            catalog.create_collection(config).unwrap();
+
+            let coll = catalog.get_collection("router_test").unwrap();
+            let mut coll = coll.write().unwrap();
+
+            // Add a router entry
+            coll.update_router_entry(RouterEntry {
+                segment_id: "test_segment.seg".to_string(),
+                level: 0,
+                segment_centroid: vec![1.0, 2.0, 3.0],
+                num_vectors: 1000,
+            }).unwrap();
+        }
+
+        // Reopen and verify router was persisted
+        {
+            let catalog = Catalog::open(dir.path()).unwrap();
+            let coll = catalog.get_collection("router_test").unwrap();
+            let coll = coll.read().unwrap();
+
+            assert_eq!(coll.router.entries.len(), 1);
+            assert_eq!(coll.router.entries[0].segment_id, "test_segment.seg");
+            assert_eq!(coll.router.entries[0].num_vectors, 1000);
+        }
     }
 }

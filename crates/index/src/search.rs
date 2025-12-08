@@ -5,6 +5,31 @@ use puffer_storage::LoadedSegment;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
+/// Compute distance using the most efficient method available.
+///
+/// For cosine distance with precomputed norms, this avoids recomputing norms.
+#[inline]
+fn compute_distance(
+    query: &[f32],
+    query_norm: f32,
+    stored: &[f32],
+    stored_norm: Option<f32>,
+    metric: Metric,
+) -> f32 {
+    match metric {
+        Metric::L2 => distance::l2_distance_squared(query, stored),
+        Metric::Cosine => {
+            if let Some(sn) = stored_norm {
+                // Fast path: use precomputed norms
+                distance::cosine_distance_with_norms(query, stored, query_norm, sn)
+            } else {
+                // Slow path: compute norms on the fly
+                distance::cosine_distance(query, stored)
+            }
+        }
+    }
+}
+
 /// A search result with distance and metadata.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -28,7 +53,12 @@ impl SearchResult {
     }
 }
 
-/// Internal struct for max-heap (we want min distances but BinaryHeap is a max-heap).
+/// Internal struct for max-heap to track top-k nearest neighbors.
+///
+/// We use a max-heap so that peek() returns the element with the LARGEST distance
+/// (the worst candidate among our top-k). This allows us to efficiently:
+/// 1. Check if a new candidate is better than our current worst
+/// 2. If so, remove the worst and add the new candidate
 #[derive(Debug)]
 struct HeapEntry {
     distance: f32,
@@ -51,8 +81,9 @@ impl PartialOrd for HeapEntry {
 
 impl Ord for HeapEntry {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Reverse order for max-heap to get min distances
-        other.distance.partial_cmp(&self.distance).unwrap_or(Ordering::Equal)
+        // Natural ordering: larger distances are "greater"
+        // This makes BinaryHeap (a max-heap) keep the largest distance at the top
+        self.distance.partial_cmp(&other.distance).unwrap_or(Ordering::Equal)
     }
 }
 
@@ -77,6 +108,14 @@ pub fn search_segment(
 
     let metric = segment.metric();
     let nprobe = nprobe.min(segment.clusters.len());
+    let has_norms = segment.has_norms();
+
+    // Precompute query norm once for cosine similarity
+    let query_norm = if metric == Metric::Cosine {
+        distance::l2_norm(query)
+    } else {
+        0.0 // Not used for L2
+    };
 
     // Step 1: Find top nprobe clusters by distance to centroids
     let mut cluster_distances: Vec<(usize, f32)> = segment
@@ -102,7 +141,12 @@ pub fn search_segment(
 
         for vec_idx in start..end {
             let vector = segment.get_vector(vec_idx);
-            let dist = distance::distance(query, vector, metric);
+            let stored_norm = if has_norms {
+                segment.get_norm(vec_idx)
+            } else {
+                None
+            };
+            let dist = compute_distance(query, query_norm, vector, stored_norm, metric);
 
             if heap.len() < k {
                 heap.push(HeapEntry {

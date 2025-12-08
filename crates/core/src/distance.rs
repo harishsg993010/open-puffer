@@ -114,6 +114,28 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     1.0 - cosine_similarity(a, b)
 }
 
+/// Compute cosine distance with precomputed norms.
+///
+/// This is faster when norms are already known, avoiding 2 sqrt operations.
+/// `norm_a` and `norm_b` should be the L2 norms of vectors `a` and `b`.
+#[inline]
+pub fn cosine_distance_with_norms(a: &[f32], b: &[f32], norm_a: f32, norm_b: f32) -> f32 {
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 1.0; // Undefined, return neutral distance
+    }
+    let dot = dot_product(a, b);
+    1.0 - (dot / (norm_a * norm_b))
+}
+
+/// Compute cosine distance between a query (with precomputed norm) and a stored vector.
+///
+/// This is the common case during search: query norm is computed once,
+/// and stored vector norms are precomputed.
+#[inline]
+pub fn cosine_distance_query(query: &[f32], query_norm: f32, stored: &[f32], stored_norm: f32) -> f32 {
+    cosine_distance_with_norms(query, stored, query_norm, stored_norm)
+}
+
 /// Compute distance between two vectors using the specified metric.
 #[inline]
 pub fn distance(a: &[f32], b: &[f32], metric: super::Metric) -> f32 {

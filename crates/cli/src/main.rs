@@ -81,6 +81,12 @@ enum Commands {
         #[arg(long)]
         collection: String,
     },
+    /// Rebuild router index for a collection
+    RebuildRouter {
+        /// Collection name
+        #[arg(long)]
+        collection: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -384,6 +390,24 @@ async fn main() -> Result<()> {
         Commands::Flush { collection } => {
             flush(&client, &args.server, &collection).await?;
         }
+        Commands::RebuildRouter { collection } => {
+            rebuild_router(&client, &args.server, &collection).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn rebuild_router(client: &Client, server: &str, collection: &str) -> Result<()> {
+    let url = format!("{}/v1/collections/{}/rebuild-router", server, collection);
+    let resp = client.post(&url).send().await?;
+
+    if resp.status().is_success() {
+        let result: serde_json::Value = resp.json().await?;
+        println!("Router rebuilt: {}", serde_json::to_string_pretty(&result)?);
+    } else {
+        let text = resp.text().await?;
+        println!("Error rebuilding router: {}", text);
     }
 
     Ok(())

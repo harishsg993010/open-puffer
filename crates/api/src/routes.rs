@@ -35,6 +35,8 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::insert_points),
         )
         .route("/v1/collections/:name/search", post(handlers::search))
+        .route("/v1/collections/:name/rebuild-router", post(handlers::rebuild_router))
+        .route("/v1/collections/:name/compact", post(handlers::compact_collection))
         // Middleware
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit
         .layer(TraceLayer::new_for_http())

@@ -45,10 +45,12 @@ use std::path::Path;
 pub const SEGMENT_MAGIC: &[u8; 7] = b"PRSEG1\0";
 
 /// Current segment format version.
-pub const SEGMENT_VERSION: u32 = 1;
+/// Version 2 adds precomputed norms for cosine distance optimization.
+pub const SEGMENT_VERSION: u32 = 2;
 
 /// Size of the fixed header in bytes.
-pub const HEADER_SIZE: usize = 7 + 4 + 4 + 1 + 4 + 4 + 8 * 5; // 64 bytes
+/// Version 2 adds norms_offset (u64).
+pub const HEADER_SIZE: usize = 7 + 4 + 4 + 1 + 4 + 4 + 8 * 6; // 72 bytes
 
 /// Segment file header.
 #[derive(Debug, Clone)]
@@ -60,6 +62,7 @@ pub struct SegmentHeader {
     pub num_clusters: u32,
     pub cluster_meta_offset: u64,
     pub vector_data_offset: u64,
+    pub norms_offset: u64, // New in v2: precomputed L2 norms for each vector
     pub id_table_offset: u64,
     pub payload_offset_table_offset: u64,
     pub payload_blob_offset: u64,
@@ -78,7 +81,8 @@ impl SegmentHeader {
         }
 
         let version = u32::from_le_bytes(data[7..11].try_into().unwrap());
-        if version != SEGMENT_VERSION {
+        // Support both v1 and v2 (v1 segments will have norms_offset = 0)
+        if version != SEGMENT_VERSION && version != 1 {
             return Err(StorageError::UnsupportedVersion(version));
         }
 
@@ -90,9 +94,21 @@ impl SegmentHeader {
         let num_clusters = u32::from_le_bytes(data[20..24].try_into().unwrap());
         let cluster_meta_offset = u64::from_le_bytes(data[24..32].try_into().unwrap());
         let vector_data_offset = u64::from_le_bytes(data[32..40].try_into().unwrap());
-        let id_table_offset = u64::from_le_bytes(data[40..48].try_into().unwrap());
-        let payload_offset_table_offset = u64::from_le_bytes(data[48..56].try_into().unwrap());
-        let payload_blob_offset = u64::from_le_bytes(data[56..64].try_into().unwrap());
+
+        // V2 format has norms_offset, V1 doesn't
+        let (norms_offset, id_table_offset, payload_offset_table_offset, payload_blob_offset) = if version >= 2 {
+            let norms_offset = u64::from_le_bytes(data[40..48].try_into().unwrap());
+            let id_table_offset = u64::from_le_bytes(data[48..56].try_into().unwrap());
+            let payload_offset_table_offset = u64::from_le_bytes(data[56..64].try_into().unwrap());
+            let payload_blob_offset = u64::from_le_bytes(data[64..72].try_into().unwrap());
+            (norms_offset, id_table_offset, payload_offset_table_offset, payload_blob_offset)
+        } else {
+            // V1 format - no norms
+            let id_table_offset = u64::from_le_bytes(data[40..48].try_into().unwrap());
+            let payload_offset_table_offset = u64::from_le_bytes(data[48..56].try_into().unwrap());
+            let payload_blob_offset = u64::from_le_bytes(data[56..64].try_into().unwrap());
+            (0, id_table_offset, payload_offset_table_offset, payload_blob_offset)
+        };
 
         Ok(Self {
             version,
@@ -102,6 +118,7 @@ impl SegmentHeader {
             num_clusters,
             cluster_meta_offset,
             vector_data_offset,
+            norms_offset,
             id_table_offset,
             payload_offset_table_offset,
             payload_blob_offset,
@@ -119,10 +136,16 @@ impl SegmentHeader {
         buf.extend_from_slice(&self.num_clusters.to_le_bytes());
         buf.extend_from_slice(&self.cluster_meta_offset.to_le_bytes());
         buf.extend_from_slice(&self.vector_data_offset.to_le_bytes());
+        buf.extend_from_slice(&self.norms_offset.to_le_bytes());
         buf.extend_from_slice(&self.id_table_offset.to_le_bytes());
         buf.extend_from_slice(&self.payload_offset_table_offset.to_le_bytes());
         buf.extend_from_slice(&self.payload_blob_offset.to_le_bytes());
         buf
+    }
+
+    /// Check if this segment has precomputed norms.
+    pub fn has_norms(&self) -> bool {
+        self.version >= 2 && self.norms_offset > 0
     }
 }
 
@@ -212,6 +235,8 @@ pub struct LoadedSegment {
     mmap: Mmap,
     /// Cached ID offsets for faster lookup
     id_offsets: Vec<usize>,
+    /// Whether this segment has precomputed norms
+    has_norms: bool,
 }
 
 impl LoadedSegment {
@@ -221,6 +246,7 @@ impl LoadedSegment {
         let mmap = unsafe { Mmap::map(&file)? };
 
         let header = SegmentHeader::from_bytes(&mmap)?;
+        let has_norms = header.has_norms();
 
         // Parse cluster metadata
         let dim = header.dimension as usize;
@@ -241,6 +267,7 @@ impl LoadedSegment {
             clusters,
             mmap,
             id_offsets,
+            has_norms,
         })
     }
 
@@ -308,6 +335,23 @@ impl LoadedSegment {
     pub fn metric(&self) -> Metric {
         self.header.metric
     }
+
+    /// Check if this segment has precomputed norms.
+    pub fn has_norms(&self) -> bool {
+        self.has_norms
+    }
+
+    /// Get precomputed L2 norm for a specific vector index.
+    ///
+    /// Returns None if this segment doesn't have precomputed norms.
+    pub fn get_norm(&self, index: usize) -> Option<f32> {
+        if !self.has_norms {
+            return None;
+        }
+        let offset = self.header.norms_offset as usize + index * 4;
+        let slice = &self.mmap[offset..offset + 4];
+        Some(f32::from_le_bytes(slice.try_into().unwrap()))
+    }
 }
 
 /// Builder for creating segment files.
@@ -369,7 +413,12 @@ impl SegmentBuilder {
         let cluster_meta_size = num_clusters * ClusterMeta::byte_size(self.dimension);
         let vector_data_offset = cluster_meta_offset + cluster_meta_size as u64;
         let vector_data_size = num_vectors * self.dimension * 4;
-        let id_table_offset = vector_data_offset + vector_data_size as u64;
+
+        // Norms section (new in v2): one f32 per vector
+        let norms_offset = vector_data_offset + vector_data_size as u64;
+        let norms_size = num_vectors * 4;
+
+        let id_table_offset = norms_offset + norms_size as u64;
 
         // Calculate ID table size
         let mut id_table_size = 0usize;
@@ -407,6 +456,7 @@ impl SegmentBuilder {
             num_clusters: num_clusters as u32,
             cluster_meta_offset,
             vector_data_offset,
+            norms_offset,
             id_table_offset,
             payload_offset_table_offset,
             payload_blob_offset,
@@ -431,6 +481,12 @@ impl SegmentBuilder {
                 for &v in &vectors[orig_idx] {
                     writer.write_all(&v.to_le_bytes())?;
                 }
+            }
+
+            // Write precomputed L2 norms in cluster order
+            for &orig_idx in &cluster_order {
+                let norm = puffer_core::distance::l2_norm(&vectors[orig_idx]);
+                writer.write_all(&norm.to_le_bytes())?;
             }
 
             // Write ID table
@@ -476,8 +532,9 @@ mod tests {
             metric: Metric::Cosine,
             num_vectors: 1000,
             num_clusters: 10,
-            cluster_meta_offset: 64,
+            cluster_meta_offset: 72,
             vector_data_offset: 1000,
+            norms_offset: 45000,
             id_table_offset: 50000,
             payload_offset_table_offset: 60000,
             payload_blob_offset: 70000,
@@ -491,6 +548,7 @@ mod tests {
         assert_eq!(parsed.metric, header.metric);
         assert_eq!(parsed.num_vectors, header.num_vectors);
         assert_eq!(parsed.num_clusters, header.num_clusters);
+        assert_eq!(parsed.norms_offset, header.norms_offset);
     }
 
     #[test]
@@ -558,5 +616,10 @@ mod tests {
 
         let p1 = segment.get_payload(1).unwrap();
         assert!(p1.is_none());
+
+        // Check norms (new in v2)
+        assert!(segment.has_norms());
+        let norm0 = segment.get_norm(0).unwrap();
+        assert!((norm0 - 1.0).abs() < 0.001); // Unit vector [1,0,0,0] has norm 1
     }
 }

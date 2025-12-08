@@ -1,4 +1,4 @@
-# OpenPuffer - High-Performance Local Vector Database
+# Puffer MVP - High-Performance Local Vector Database
 
 A single-node, NVMe-backed, segment-based vector database implemented in Rust.
 
@@ -134,10 +134,88 @@ PAYLOAD BLOB:
 
 ## Benchmarks
 
-Run benchmarks:
+### Criterion Benchmarks
 ```bash
 cargo bench
 ```
+
+### Recall Benchmark
+
+Measure recall@K of ANN search vs brute-force ground truth:
+
+```bash
+# Run recall benchmark on a collection
+./target/release/recall-bench --collection my_collection --data-dir ./data \
+    --num-queries 100 --top-k 10 --nprobe 4,8,12,16 --output recall_results.csv
+
+# Generate plots (requires Python with matplotlib and pandas)
+python scripts/plot_recall_latency.py recall_results.csv --output-dir ./plots
+```
+
+Options:
+- `--collection`: Name of the collection to benchmark (required)
+- `--data-dir`: Path to data directory (default: `./data`)
+- `--num-queries`: Number of query vectors (default: 100)
+- `--top-k`: K in recall@K (default: 10)
+- `--nprobe`: Comma-separated nprobe values to test (default: `4,8,12,16`)
+- `--sample-size`: Number of vectors to sample for evaluation (default: 50000)
+- `--output`: Output CSV file path (default: `recall_results.csv`)
+- `--seed`: Random seed for reproducibility (default: 42)
+- `--router-top-m`: Number of segments to search via router (0 = use default)
+
+Output files:
+- `recall_results.csv`: Raw metrics data
+- `recall_vs_nprobe.png`: Recall@K vs nprobe
+- `latency_vs_nprobe.png`: Latency percentiles vs nprobe
+- `recall_latency_tradeoff.png`: Recall vs latency Pareto curve
+- `qps_vs_nprobe.png`: Throughput vs nprobe
+
+### Real Embeddings Recall Benchmark
+
+Benchmark with real embeddings from NumPy files (e.g., sentence-transformers):
+
+```bash
+# Run benchmark with real embeddings
+./target/release/real-recall-bench \
+    --embeddings-file data/embeddings.npy \
+    --ids-file data/ids.txt \
+    --collection-name st_embeddings \
+    --metric cosine \
+    --top-k 10 \
+    --num-queries 500 \
+    --nprobe 4,8,16,32 \
+    --sample-size 100000 \
+    --output recall_real.csv
+
+# Generate plots
+python scripts/plot_real_recall.py recall_real.csv --output-dir ./plots
+```
+
+**Input format:**
+- `embeddings.npy`: NumPy array with shape `[N, dim]`, dtype `float32`
+- `ids.txt` (optional): One ID per line. If omitted, auto-generates `vec_0`, `vec_1`, ...
+
+**Options:**
+- `--embeddings-file`: Path to NumPy .npy file (required)
+- `--ids-file`: Path to IDs text file (optional)
+- `--collection-name`: Name of collection to create/use (required)
+- `--data-dir`: Path to data directory (default: `./data`)
+- `--metric`: Distance metric: `cosine` or `l2` (default: `cosine`)
+- `--top-k`: K in recall@K (default: 10)
+- `--num-queries`: Number of queries (default: 500)
+- `--nprobe`: Comma-separated nprobe values (default: `4,8,16,32`)
+- `--sample-size`: Number of embeddings to sample, 0 = all (default: 0)
+- `--output`: Output CSV path (default: `recall_real.csv`)
+- `--rebuild-collection`: Delete and recreate collection if exists
+- `--staging-threshold`: Vectors per segment (default: 10000)
+- `--batch-size`: Insert batch size (default: 5000)
+
+**Output files:**
+- `recall_real.csv`: Metrics data
+- `real_recall_vs_nprobe.png`: Recall vs nprobe
+- `real_latency_vs_nprobe.png`: Latency percentiles vs nprobe
+- `real_recall_latency_tradeoff.png`: Recall vs latency curve
+- `real_qps_vs_nprobe.png`: Throughput vs nprobe
 
 ## Testing
 

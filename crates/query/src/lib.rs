@@ -2,8 +2,10 @@
 //!
 //! Handles multi-segment search, staging buffer search, and result merging.
 
+pub mod compaction;
 pub mod engine;
 pub mod error;
 
-pub use engine::QueryEngine;
+pub use compaction::{compact_collection, compact_until_done, needs_compaction, CompactionConfig};
+pub use engine::{CompactionResult, QueryEngine};
 pub use error::{QueryError, QueryResult};

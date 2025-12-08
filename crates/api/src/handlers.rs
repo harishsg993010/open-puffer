@@ -49,6 +49,12 @@ pub struct CreateCollectionRequest {
     pub staging_threshold: Option<usize>,
     #[serde(default)]
     pub num_clusters: Option<usize>,
+    #[serde(default)]
+    pub router_top_m: Option<usize>,
+    #[serde(default)]
+    pub l0_max_segments: Option<usize>,
+    #[serde(default)]
+    pub segment_target_size: Option<usize>,
 }
 
 /// Create collection response.
@@ -70,6 +76,9 @@ pub async fn create_collection(
         metric: req.metric.unwrap_or(Metric::Cosine),
         staging_threshold: req.staging_threshold.unwrap_or(10_000),
         num_clusters: req.num_clusters.unwrap_or(100),
+        router_top_m: req.router_top_m.unwrap_or(5),
+        l0_max_segments: req.l0_max_segments.unwrap_or(10),
+        segment_target_size: req.segment_target_size.unwrap_or(100_000),
     };
 
     match state.catalog.create_collection(config.clone()) {
@@ -272,6 +281,46 @@ pub async fn flush_collection(
 ) -> impl IntoResponse {
     match state.engine.force_flush(&collection_name) {
         Ok(()) => StatusCode::OK.into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+/// Rebuild router response.
+#[derive(Debug, Serialize)]
+pub struct RebuildRouterResponse {
+    pub segments_rebuilt: usize,
+}
+
+/// Rebuild router index for a collection.
+pub async fn rebuild_router(
+    State(state): State<AppState>,
+    Path(collection_name): Path<String>,
+) -> impl IntoResponse {
+    match state.engine.rebuild_router(&collection_name) {
+        Ok(count) => (
+            StatusCode::OK,
+            Json(RebuildRouterResponse { segments_rebuilt: count }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+/// Trigger compaction for a collection.
+pub async fn compact_collection(
+    State(state): State<AppState>,
+    Path(collection_name): Path<String>,
+) -> impl IntoResponse {
+    match state.engine.compact(&collection_name) {
+        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse::new(e.to_string())),

@@ -1,4 +1,4 @@
-# Puffer - High-Performance Vector Database
+# Open Puffer - High-Performance Vector Database
 
 A single-node, NVMe-backed, segment-based vector database implemented in Rust with advanced retrieval capabilities.
 

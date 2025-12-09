@@ -12,6 +12,7 @@ puffer-core = { workspace = true }
 puffer-storage = { workspace = true }
 puffer-index = { workspace = true }
 puffer-query = { workspace = true }
+puffer-fts = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
@@ -23,3 +24,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
+parking_lot = { workspace = true }

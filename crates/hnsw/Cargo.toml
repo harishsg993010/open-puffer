@@ -1,0 +1,20 @@
+[package]
+name = "puffer-hnsw"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "HNSW (Hierarchical Navigable Small World) graph for Puffer vector database"
+
+[dependencies]
+puffer-core = { path = "../core" }
+rayon.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = "3.8"

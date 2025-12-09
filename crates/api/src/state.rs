@@ -1,7 +1,12 @@
 //! Application state.
 
+use parking_lot::RwLock;
+use puffer_fts::config::FtsConfig;
+use puffer_fts::index::FtsIndex;
 use puffer_query::QueryEngine;
 use puffer_storage::Catalog;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Shared application state.
@@ -9,11 +14,78 @@ use std::sync::Arc;
 pub struct AppState {
     pub catalog: Arc<Catalog>,
     pub engine: Arc<QueryEngine>,
+    /// FTS indices per collection.
+    fts_indices: Arc<RwLock<HashMap<String, Arc<FtsIndex>>>>,
+    /// Base data directory.
+    data_dir: PathBuf,
 }
 
 impl AppState {
     pub fn new(catalog: Arc<Catalog>) -> Self {
+        let data_dir = catalog.base_path().to_path_buf();
         let engine = Arc::new(QueryEngine::new(catalog.clone()));
-        Self { catalog, engine }
+        Self {
+            catalog,
+            engine,
+            fts_indices: Arc::new(RwLock::new(HashMap::new())),
+            data_dir,
+        }
+    }
+
+    /// Get or create FTS index for a collection.
+    pub fn get_fts_index(&self, collection_name: &str) -> Option<Arc<FtsIndex>> {
+        // Check if already loaded
+        {
+            let indices = self.fts_indices.read();
+            if let Some(index) = indices.get(collection_name) {
+                return Some(index.clone());
+            }
+        }
+
+        // Try to open or create
+        let fts_path = self.data_dir.join(collection_name).join("fts");
+        let config = FtsConfig::enabled()
+            .with_fields(vec!["text".to_string(), "title".to_string()]);
+
+        let index = match FtsIndex::open_or_create(&fts_path, config) {
+            Ok(idx) => Arc::new(idx),
+            Err(e) => {
+                tracing::error!("Failed to open FTS index for {}: {}", collection_name, e);
+                return None;
+            }
+        };
+
+        // Cache it
+        {
+            let mut indices = self.fts_indices.write();
+            indices.insert(collection_name.to_string(), index.clone());
+        }
+
+        Some(index)
+    }
+
+    /// Enable FTS for a collection with custom config.
+    pub fn enable_fts(&self, collection_name: &str, config: FtsConfig) -> Result<(), String> {
+        let fts_path = self.data_dir.join(collection_name).join("fts");
+
+        let index = FtsIndex::open_or_create(&fts_path, config)
+            .map_err(|e| format!("Failed to create FTS index: {}", e))?;
+
+        let mut indices = self.fts_indices.write();
+        indices.insert(collection_name.to_string(), Arc::new(index));
+
+        Ok(())
+    }
+
+    /// Disable FTS for a collection.
+    pub fn disable_fts(&self, collection_name: &str) {
+        let mut indices = self.fts_indices.write();
+        indices.remove(collection_name);
+    }
+
+    /// Check if FTS is enabled for a collection.
+    pub fn has_fts(&self, collection_name: &str) -> bool {
+        let indices = self.fts_indices.read();
+        indices.contains_key(collection_name)
     }
 }

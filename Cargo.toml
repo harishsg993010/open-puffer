@@ -8,6 +8,9 @@ members = [
     "crates/api",
     "crates/cli",
     "crates/bench",
+    "crates/pq",
+    "crates/hnsw",
+    "crates/fts",
 ]
 
 [workspace.package]
@@ -65,6 +68,15 @@ puffer-storage = { path = "crates/storage" }
 puffer-index = { path = "crates/index" }
 puffer-query = { path = "crates/query" }
 puffer-api = { path = "crates/api" }
+puffer-pq = { path = "crates/pq" }
+puffer-hnsw = { path = "crates/hnsw" }
+puffer-fts = { path = "crates/fts" }
+
+# Full-text search
+tantivy = "0.22"
+
+# Concurrency
+parking_lot = "0.12"
 
 [profile.release]
 lto = true

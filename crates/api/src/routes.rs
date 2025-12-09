@@ -34,7 +34,15 @@ pub fn create_router(state: AppState) -> Router {
             "/v1/collections/:name/points",
             post(handlers::insert_points),
         )
+        // Vector search
         .route("/v1/collections/:name/search", post(handlers::search))
+        // Full-text search
+        .route("/v1/collections/:name/text-search", post(handlers::text_search))
+        // Hybrid search (vector + text)
+        .route("/v1/collections/:name/hybrid-search", post(handlers::hybrid_search))
+        // Text documents for FTS
+        .route("/v1/collections/:name/text-documents", post(handlers::add_text_documents))
+        // Maintenance
         .route("/v1/collections/:name/rebuild-router", post(handlers::rebuild_router))
         .route("/v1/collections/:name/compact", post(handlers::compact_collection))
         // Middleware

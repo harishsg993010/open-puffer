@@ -1,0 +1,19 @@
+[package]
+name = "puffer-fts"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Full-text search (BM25) for Puffer vector database using Tantivy"
+
+[dependencies]
+puffer-core = { path = "../core" }
+tantivy = "0.22"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = "3.8"

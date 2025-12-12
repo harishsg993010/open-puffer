@@ -13,6 +13,7 @@ puffer-storage = { workspace = true }
 puffer-index = { workspace = true }
 puffer-query = { workspace = true }
 puffer-fts = { workspace = true }
+puffer-embed = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }

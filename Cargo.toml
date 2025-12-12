@@ -11,6 +11,7 @@ members = [
     "crates/pq",
     "crates/hnsw",
     "crates/fts",
+    "crates/embed",
 ]
 
 [workspace.package]
@@ -71,6 +72,13 @@ puffer-api = { path = "crates/api" }
 puffer-pq = { path = "crates/pq" }
 puffer-hnsw = { path = "crates/hnsw" }
 puffer-fts = { path = "crates/fts" }
+puffer-embed = { path = "crates/embed" }
+
+# Embeddings
+embed_anything = "0.6"
+
+# Text chunking
+chunkr = "0.1"
 
 # Full-text search
 tantivy = "0.22"

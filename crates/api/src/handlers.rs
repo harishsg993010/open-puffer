@@ -8,6 +8,7 @@ use axum::{
     Json,
 };
 use puffer_core::{Metric, VectorId, VectorRecord};
+use puffer_embed::ModelType;
 use puffer_storage::CollectionConfig;
 use serde::{Deserialize, Serialize};
 
@@ -705,4 +706,355 @@ pub async fn add_text_documents(
         Json(AddTextDocumentsResponse { indexed }),
     )
         .into_response()
+}
+
+// =============================================================================
+// Embedding Handlers
+// =============================================================================
+
+/// Configure embedder request.
+#[derive(Debug, Deserialize)]
+pub struct ConfigureEmbedderRequest {
+    /// Model type: jina, bert, sentence_transformer, clip, openai, cohere.
+    #[serde(default)]
+    pub model_type: Option<String>,
+    /// Custom model ID (optional).
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// API key for cloud models (openai, cohere).
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Batch size for embedding.
+    #[serde(default)]
+    pub batch_size: Option<usize>,
+}
+
+/// Embedder info response.
+#[derive(Debug, Serialize)]
+pub struct EmbedderInfoResponse {
+    pub model_type: String,
+    pub model_id: String,
+    pub dimension: usize,
+    pub initialized: bool,
+}
+
+/// Configure the embedder model.
+pub async fn configure_embedder(
+    State(state): State<AppState>,
+    Json(req): Json<ConfigureEmbedderRequest>,
+) -> impl IntoResponse {
+    use puffer_embed::EmbedConfig;
+
+    let model_type = match req.model_type.as_deref() {
+        Some("jina") | None => ModelType::Jina,
+        Some("bert") => ModelType::Bert,
+        Some("sentence_transformer") | Some("sentence-transformer") => ModelType::SentenceTransformer,
+        Some("clip") => ModelType::Clip,
+        Some("openai") => ModelType::OpenAI,
+        Some("cohere") => ModelType::Cohere,
+        Some(other) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new(format!("Unknown model type: {}", other))),
+            )
+                .into_response();
+        }
+    };
+
+    let mut config = EmbedConfig::new(model_type.clone());
+
+    if let Some(model_id) = req.model_id {
+        config = config.with_model_id(model_id);
+    }
+    if let Some(api_key) = req.api_key {
+        config = config.with_api_key(api_key);
+    }
+    if let Some(batch_size) = req.batch_size {
+        config = config.with_batch_size(batch_size);
+    }
+
+    state.configure_embedder(config);
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "configured",
+            "model_type": format!("{:?}", model_type),
+        })),
+    )
+        .into_response()
+}
+
+/// Get embedder info.
+pub async fn get_embedder_info(State(state): State<AppState>) -> impl IntoResponse {
+    match state.get_embedder().await {
+        Ok(embedder) => {
+            let config = embedder.config();
+            (
+                StatusCode::OK,
+                Json(EmbedderInfoResponse {
+                    model_type: format!("{:?}", config.model_type),
+                    model_id: config.get_model_id().to_string(),
+                    dimension: embedder.dimension(),
+                    initialized: true,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse::new(e)),
+        )
+            .into_response(),
+    }
+}
+
+/// Embed texts request.
+#[derive(Debug, Deserialize)]
+pub struct EmbedTextsRequest {
+    /// Texts to embed.
+    pub texts: Vec<String>,
+}
+
+/// Embed texts response.
+#[derive(Debug, Serialize)]
+pub struct EmbedTextsResponse {
+    pub embeddings: Vec<Vec<f32>>,
+    pub dimension: usize,
+    pub count: usize,
+}
+
+/// Embed multiple texts.
+pub async fn embed_texts(
+    State(state): State<AppState>,
+    Json(req): Json<EmbedTextsRequest>,
+) -> impl IntoResponse {
+    if req.texts.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new("No texts provided")),
+        )
+            .into_response();
+    }
+
+    let embedder = match state.get_embedder().await {
+        Ok(e) => e,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse::new(e)),
+            )
+                .into_response();
+        }
+    };
+
+    match embedder.embed_texts(&req.texts).await {
+        Ok(results) => {
+            let embeddings: Vec<Vec<f32>> = results.into_iter().map(|r| r.embedding).collect();
+            let dimension = embedder.dimension();
+            let count = embeddings.len();
+
+            (
+                StatusCode::OK,
+                Json(EmbedTextsResponse {
+                    embeddings,
+                    dimension,
+                    count,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::new(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+/// Embed and insert request (combined operation).
+#[derive(Debug, Deserialize)]
+pub struct EmbedAndInsertRequest {
+    /// Documents to embed and insert.
+    pub documents: Vec<DocumentInput>,
+}
+
+/// Document input for embedding.
+#[derive(Debug, Deserialize)]
+pub struct DocumentInput {
+    /// Document ID.
+    pub id: String,
+    /// Text content to embed.
+    pub text: String,
+    /// Optional metadata/payload.
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
+}
+
+/// Embed and insert response.
+#[derive(Debug, Serialize)]
+pub struct EmbedAndInsertResponse {
+    pub embedded: usize,
+    pub inserted: usize,
+    pub dimension: usize,
+}
+
+/// Embed texts and insert into collection.
+pub async fn embed_and_insert(
+    State(state): State<AppState>,
+    Path(collection_name): Path<String>,
+    Json(req): Json<EmbedAndInsertRequest>,
+) -> impl IntoResponse {
+    if req.documents.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new("No documents provided")),
+        )
+            .into_response();
+    }
+
+    // Get embedder
+    let embedder = match state.get_embedder().await {
+        Ok(e) => e,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse::new(e)),
+            )
+                .into_response();
+        }
+    };
+
+    // Extract texts
+    let texts: Vec<String> = req.documents.iter().map(|d| d.text.clone()).collect();
+
+    // Generate embeddings
+    let embeddings = match embedder.embed_texts(&texts).await {
+        Ok(results) => results,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(format!("Embedding failed: {}", e))),
+            )
+                .into_response();
+        }
+    };
+
+    // Build vector records
+    let records: Vec<VectorRecord> = req
+        .documents
+        .into_iter()
+        .zip(embeddings.into_iter())
+        .map(|(doc, emb)| {
+            let mut record = VectorRecord::new(VectorId::new(doc.id), emb.embedding);
+            if let Some(payload) = doc.payload {
+                record = record.with_payload(payload);
+            }
+            record
+        })
+        .collect();
+
+    let dimension = embedder.dimension();
+    let embedded = records.len();
+
+    // Insert into collection
+    match state.engine.insert(&collection_name, records) {
+        Ok(inserted) => (
+            StatusCode::OK,
+            Json(EmbedAndInsertResponse {
+                embedded,
+                inserted,
+                dimension,
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+/// Semantic search request (text query -> embedding -> search).
+#[derive(Debug, Deserialize)]
+pub struct SemanticSearchRequest {
+    /// Text query to search for.
+    pub query: String,
+    /// Number of results.
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+    /// Number of clusters to probe.
+    #[serde(default = "default_nprobe")]
+    pub nprobe: usize,
+    /// Include payload in results.
+    #[serde(default)]
+    pub include_payload: bool,
+}
+
+/// Semantic search: embed query text and search.
+pub async fn semantic_search(
+    State(state): State<AppState>,
+    Path(collection_name): Path<String>,
+    Json(req): Json<SemanticSearchRequest>,
+) -> impl IntoResponse {
+    let start = std::time::Instant::now();
+
+    // Get embedder
+    let embedder = match state.get_embedder().await {
+        Ok(e) => e,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse::new(e)),
+            )
+                .into_response();
+        }
+    };
+
+    // Embed query
+    let query_vector = match embedder.embed_text(&req.query).await {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(format!("Failed to embed query: {}", e))),
+            )
+                .into_response();
+        }
+    };
+
+    // Search
+    match state.engine.search(
+        &collection_name,
+        &query_vector,
+        req.top_k,
+        req.nprobe,
+        req.include_payload,
+    ) {
+        Ok(results) => {
+            let items: Vec<SearchResultItem> = results
+                .into_iter()
+                .map(|r| SearchResultItem {
+                    id: r.id.to_string(),
+                    distance: r.distance,
+                    payload: r.payload,
+                })
+                .collect();
+
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "results": items,
+                    "query_time_ms": start.elapsed().as_millis() as u64,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(e.to_string())),
+        )
+            .into_response(),
+    }
 }

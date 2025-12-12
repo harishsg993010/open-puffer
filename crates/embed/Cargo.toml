@@ -1,0 +1,34 @@
+[package]
+name = "puffer-embed"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Embedding generation for Puffer vector database"
+
+[dependencies]
+# Embedding library
+embed_anything = { workspace = true }
+
+# Text chunking
+chunkr = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Parallelism
+rayon = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

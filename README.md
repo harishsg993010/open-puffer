@@ -1,4 +1,4 @@
-# Open Puffer - High-Performance Vector Database
+# Puffer - High-Performance Vector Database
 
 A single-node, NVMe-backed, segment-based vector database implemented in Rust with advanced retrieval capabilities.
 
@@ -27,6 +27,18 @@ A single-node, NVMe-backed, segment-based vector database implemented in Rust wi
   - Normalized Weighted Sum
   - Softmax Fusion
 - **Configurable lambda** for text vs vector weighting
+
+### Built-in Embeddings
+- **Automatic text embedding** via [embed_anything](https://github.com/StarlightSearch/EmbedAnything)
+- **Multiple model support**:
+  - Jina (default: jina-embeddings-v2-small-en)
+  - BERT (all-MiniLM-L6-v2)
+  - Sentence Transformers
+  - CLIP (for images)
+  - OpenAI (API-based)
+  - Cohere (API-based)
+- **Semantic search** - embed query text and search in one call
+- **Embed-and-insert** - embed documents and store vectors automatically
 
 ### Additional Features
 - **HTTP JSON API** with axum
@@ -90,6 +102,16 @@ Search:
 | POST | `/v1/collections/{name}/text-documents` | Add text documents |
 | POST | `/v1/collections/{name}/text-search` | BM25 text search |
 | POST | `/v1/collections/{name}/hybrid-search` | Hybrid vector + text search |
+
+### Embedding Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/v1/embeddings/config` | Configure embedding model |
+| GET | `/v1/embeddings/info` | Get current embedder info |
+| POST | `/v1/embeddings/embed` | Embed text strings |
+| POST | `/v1/collections/{name}/embed-and-insert` | Embed docs & insert vectors |
+| POST | `/v1/collections/{name}/semantic-search` | Text query → vector search |
 
 ## API Examples
 
@@ -181,6 +203,76 @@ curl -X POST http://localhost:8080/v1/collections/my_collection/hybrid-search \
 - `0.5` = Equal weight (default)
 - `1.0` = Text search only
 
+### Get Embedder Info
+
+```bash
+curl http://localhost:8080/v1/embeddings/info
+```
+
+Response:
+```json
+{"model_type":"Jina","model_id":"jinaai/jina-embeddings-v2-small-en","dimension":512,"initialized":true}
+```
+
+### Configure Embedder
+
+```bash
+curl -X POST http://localhost:8080/v1/embeddings/config \
+  -H "Content-Type: application/json" \
+  -d '{"model_type": "bert"}'
+```
+
+### Embed Texts
+
+```bash
+curl -X POST http://localhost:8080/v1/embeddings/embed \
+  -H "Content-Type: application/json" \
+  -d '{"texts": ["Hello world", "Machine learning is fascinating"]}'
+```
+
+### Embed and Insert Documents
+
+```bash
+curl -X POST http://localhost:8080/v1/collections/my_collection/embed-and-insert \
+  -H "Content-Type: application/json" \
+  -d '{
+    "documents": [
+      {"id": "doc1", "text": "Machine learning enables AI systems"},
+      {"id": "doc2", "text": "Deep learning uses neural networks"},
+      {"id": "doc3", "text": "Cats are wonderful pets"}
+    ]
+  }'
+```
+
+Response:
+```json
+{"embedded":3,"inserted":3,"dimension":512}
+```
+
+### Semantic Search
+
+Search with natural language - the query is automatically embedded:
+
+```bash
+curl -X POST http://localhost:8080/v1/collections/my_collection/semantic-search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "artificial intelligence and machine learning",
+    "top_k": 10
+  }'
+```
+
+Response:
+```json
+{
+  "query_time_ms": 25,
+  "results": [
+    {"id": "doc1", "distance": 0.063},
+    {"id": "doc2", "distance": 0.193}
+  ]
+}
+```
+
 ## Project Structure
 
 ```
@@ -196,6 +288,7 @@ puffer-mvp/
     pq/          # Product Quantization + OPQ
     hnsw/        # HNSW graph index
     fts/         # Full-text search (Tantivy)
+    embed/       # Text embeddings (embed_anything)
 ```
 
 ## Performance
@@ -343,6 +436,34 @@ Arguments: `<num_documents> <dimension> <num_queries>`
 - BM25 scoring with configurable k1 and b parameters
 - Supports title, text, tags, and metadata fields
 - Automatic tokenization with stemming
+
+### Embeddings
+
+- Powered by [embed_anything](https://github.com/StarlightSearch/EmbedAnything)
+- Local models via HuggingFace (Jina, BERT, Sentence Transformers)
+- Cloud models via API (OpenAI, Cohere)
+- Lazy model initialization (loaded on first use)
+- Configurable batch size and chunking
+
+**Supported Models:**
+
+| Model Type | Default Model ID | Dimension | API Key Required |
+|------------|------------------|-----------|------------------|
+| Jina | jinaai/jina-embeddings-v2-small-en | 512 | No |
+| BERT | sentence-transformers/all-MiniLM-L6-v2 | 384 | No |
+| SentenceTransformer | BAAI/bge-small-en-v1.5 | 384 | No |
+| CLIP | openai/clip-vit-base-patch32 | 512 | No |
+| OpenAI | text-embedding-3-small | 1536 | Yes |
+| Cohere | embed-english-v3.0 | 1024 | Yes |
+
+### Text Chunking
+
+- Powered by [chunkr](https://crates.io/crates/chunkr)
+- Split large documents into smaller chunks suitable for embedding
+- Multiple chunking strategies:
+  - **Words** - Chunk by word count (default: 256 words, 32 overlap)
+  - **Characters** - Chunk by character count
+- Configurable chunk size and overlap for context preservation
 
 ## License
 

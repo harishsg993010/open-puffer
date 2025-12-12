@@ -45,6 +45,12 @@ pub fn create_router(state: AppState) -> Router {
         // Maintenance
         .route("/v1/collections/:name/rebuild-router", post(handlers::rebuild_router))
         .route("/v1/collections/:name/compact", post(handlers::compact_collection))
+        // Embeddings
+        .route("/v1/embeddings/config", post(handlers::configure_embedder))
+        .route("/v1/embeddings/info", get(handlers::get_embedder_info))
+        .route("/v1/embeddings/embed", post(handlers::embed_texts))
+        .route("/v1/collections/:name/embed-and-insert", post(handlers::embed_and_insert))
+        .route("/v1/collections/:name/semantic-search", post(handlers::semantic_search))
         // Middleware
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit
         .layer(TraceLayer::new_for_http())
